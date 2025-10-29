@@ -1,5 +1,5 @@
 import pandas as pd 
-import torch as th 
+import torch 
 import scanpy as sc
 import anndata as ad
 import numpy as np
@@ -7,9 +7,57 @@ from torch.utils.data import Dataset, DataLoader
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.preprocessing import LabelEncoder
-
+from typing import Dict, List, Optional, Tuple
 
 # ===================== VAE Model Architecture =====================
+
+class Encoder(nn.Module):
+    def __init__(self,
+                 in_channels: int,
+                 hidden_dims: List):
+        super(Encoder, self).__init__()
+
+        self.in_channels = in_channels
+
+        modules = [
+        nn.Sequential(nn.Dropout())]
+        # Build encoder
+        for h_dim in hidden_dims:
+            modules.append(
+                nn.Sequential(
+                    nn.Linear(in_channels, h_dim),
+                    nn.BatchNorm1d(h_dim),
+                    nn.LeakyReLU()
+                    )
+            )
+            in_channels = h_dim
+
+        self.encoder = nn.Sequential(*modules)
+
+    def forward(self, x):
+        return self.encoder(x)
+
+
+class Decoder(nn.Module):
+    def __init__(self,
+                in_channels: int,
+                hidden_dims: int,
+                out_dims: int):
+        super(Decoder, self).__init__()
+
+        self.in_h = nn.Linear(in_channels, hidden_dims)
+        self.bn = nn.BatchNorm1d(hidden_dims)
+        self.relu = nn.LeakyReLU()
+        self.fc = nn.Linear(hidden_dims, out_dims)
+    
+    def forward(self, x):
+        x = self.in_h(x)
+        x = self.bn(x)
+        x = self.relu(x)
+        x = self.fc(x)
+        return torch.tanh(x)
+
+
 class ConditionalVAE(nn.Module):
     """
     Conditional Variational Autoencoder for learning separable embeddings.
@@ -41,19 +89,8 @@ class ConditionalVAE(nn.Module):
         encoder_input_dim = input_dim + n_classes if self.is_conditional else input_dim
         
         # ===== Encoder =====
-        encoder_layers = []
-        prev_dim = encoder_input_dim
-        
-        for h_dim in hidden_dims:
-            encoder_layers.extend([
-                nn.Linear(prev_dim, h_dim),
-                nn.BatchNorm1d(h_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout)
-            ])
-            prev_dim = h_dim
             
-        self.encoder = nn.Sequential(*encoder_layers)
+        self.encoder = Encoder(encoder_input_dim, hidden_dims)
         
         # Latent space parameters
         self.fc_mu = nn.Linear(hidden_dims[-1], latent_dim)
@@ -61,20 +98,18 @@ class ConditionalVAE(nn.Module):
         
         # ===== Decoder =====
         decoder_input_dim = latent_dim + n_classes if self.is_conditional else latent_dim
-        decoder_layers = []
-        prev_dim = decoder_input_dim
-        
+        modules = []
+        in_ch = decoder_input_dim
         for h_dim in reversed(hidden_dims):
-            decoder_layers.extend([
-                nn.Linear(prev_dim, h_dim),
-                nn.BatchNorm1d(h_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout)
-            ])
-            prev_dim = h_dim
-            
-        decoder_layers.append(nn.Linear(hidden_dims[0], input_dim))
-        self.decoder = nn.Sequential(*decoder_layers)
+            modules.append(
+                    nn.Sequential(
+                        nn.Linear(in_ch, h_dim),
+                        nn.BatchNorm1d(h_dim),
+                        nn.LeakyReLU())
+                    )
+            in_ch = h_dim
+        modules.append(nn.Sequential(nn.Linear(in_ch, input_dim), nn.Tanh()))
+        self.decoder = nn.Sequential(*modules)
         
         # Additional components for better separation
         if self.is_conditional:
@@ -99,7 +134,7 @@ class ConditionalVAE(nn.Module):
             logvar: Log variance of latent distribution
         """
         if self.is_conditional and c is not None:
-            x = th.cat([x, c], dim=-1)
+            x = torch.cat([x, c], dim=-1)
             
         h = self.encoder(x)
         mu = self.fc_mu(h)
@@ -118,8 +153,8 @@ class ConditionalVAE(nn.Module):
         Returns:
             Sampled latent vector
         """
-        std = th.exp(0.5 * logvar)
-        eps = th.randn_like(std)
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
         return mu + eps * std
     
     def decode(self, z, c= None):
@@ -134,7 +169,7 @@ class ConditionalVAE(nn.Module):
             Reconstructed input
         """
         if self.is_conditional and c is not None:
-            z = th.cat([z, c], dim=-1)
+            z = torch.cat([z, c], dim=-1)
             
         return self.decoder(z)
     
@@ -185,20 +220,25 @@ class VAELoss(nn.Module):
                 mu, 
                 logvar,
                 adv_pred= None, # Will be ignored for now
-                labels= None):  # Will be ignored for now
+                labels= None,
+                training=True): 
         
         # --- FIX 1: Use 'sum' and divide by batch size ---
         # This calculates loss "per-sample" not "per-gene"
-        recon_loss = F.mse_loss(recon_x, x, reduction='sum') / x.shape[0]
+        # recon_loss = F.mse_loss(recon_x, x, reduction='sum') / x.shape[0]
+        recons_loss =F.mse_loss(recon_x, x)
         
         # --- FIX 2: Sum over latent dims, then mean over batch ---
         # This also calculates loss "per-sample"
-        kl_loss = -0.5 * th.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
-        
-        # --- FIX 3: Apply beta (annealing) to the KL term ---
-        total_loss = recon_loss + self.beta * kl_loss
-        
-        loss_dict = {'recon': recon_loss.item(), 'kl': kl_loss.item()}
+        # kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
+        kl_loss = torch.mean(-0.5 * torch.sum(1 + logvar - mu ** 2 - logvar.exp(), dim = 1), dim = 0)
+        # applying the beta correction
+        if training:
+            # https://openreview.net/forum?id=Sy2fzU9gl
+            total_loss = recons_loss + self.beta * kl_loss
+        else:
+            total_loss = recons_loss
+        loss_dict = {'recon': recons_loss.item(), 'kl': kl_loss.item()}
         
         # (Adversarial loss removed until classifier is trained)
         
@@ -210,7 +250,7 @@ def train_vae_with_test_set(
     test_loader,
     n_epochs= 100,
     learning_rate= 1e-3,
-    device= 'cuda' if th.cuda.is_available() else 'cpu',
+    device= 'cuda' if torch.cuda.is_available() else 'cpu',
     early_stopping_patience= 10
 ):
     """
@@ -222,8 +262,8 @@ def train_vae_with_test_set(
    
     
     model = model.to(device)
-    optimizer = th.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = th.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)
     
     criterion = VAELoss()
     n_epochs_warmup = 50
@@ -286,7 +326,7 @@ def train_vae_with_test_set(
         test_loss = 0
         test_metrics = {'recon': 0, 'kl': 0, 'adversarial': 0}
         
-        with th.no_grad():
+        with torch.no_grad():
             for batch in test_loader:
                 if len(batch) == 2:
                     data, labels = batch
@@ -319,7 +359,7 @@ def train_vae_with_test_set(
             best_test_loss = test_loss
             patience_counter = 0
             # Save best model
-            th.save(model.state_dict(), 'results/best_vae_model.pth')
+            torch.save(model.state_dict(), 'results/best_vae_model.pth')
         else:
             patience_counter += 1
             
@@ -334,6 +374,6 @@ def train_vae_with_test_set(
             print(f"  Test Loss: {test_loss:.4f} (Recon: {test_metrics['recon']:.4f}, KL: {test_metrics['kl']:.4f})")
     
     # Load best model
-    model.load_state_dict(th.load('results/best_vae_model.pth'))
+    model.load_state_dict(torch.load('results/best_vae_model.pth'))
     
     return history
