@@ -4,7 +4,10 @@ import seaborn as sns
 import torch.nn.functional as F
 import numpy as np
 from . import logger
-
+from umap import UMAP
+import pandas as pd 
+import scanpy as sc
+import os 
 # ===================== Embedding Extraction and Visualization =====================
 def extract_embeddings(model, 
                       data_loader,
@@ -80,11 +83,11 @@ def visualize_embeddings(embeddings,
         save_path: Path to save figure
     """
    
-    from umap import UMAP
+    
     
     # Reduce to 2D
 
-    reducer = UMAP(n_neighbors=50, min_dist=0.2, random_state=42)
+    reducer = UMAP(n_neighbors=30, min_dist=0.2, random_state=42)
     embeddings_2d = reducer.fit_transform(embeddings)
     
     # Plot
@@ -114,3 +117,119 @@ def visualize_embeddings(embeddings,
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
 
+
+def get_active_latent_dims(
+    df_all: pd.DataFrame,
+    outdir: str,
+    activity_threshold: float = 0.4,
+    plot_threshold_line: float = 0.4,
+    plot: bool = True,
+):
+    """
+    Compute latent dimension activity and return the active latent dims.
+
+    Args:
+        df_all: DataFrame containing latent dimensions as columns z1, z2, ...
+        outdir: Directory where outputs (TSV + PNG) will be saved.
+        activity_threshold: Variance cutoff to count a latent dim as "active".
+        plot_threshold_line: Horizontal line (variance) shown on the plot.
+        plot: Whether to generate a PNG barplot of variance per latent dim.
+
+    Returns:
+        List of active latent dimension names, e.g. ["z1", "z3", ...].
+        If no latent columns found, returns [].
+    """
+    # Only keep latent columns z1, z2, ...
+    latent_values = df_all.filter(regex=r"^z\d+").values
+    if latent_values.size == 0:
+        logger.log("[warn] No latent columns (z1, z2, ...) found in df_all.")
+        return []
+
+    latent_var = np.var(latent_values, axis=0)
+    mean_var = float(np.mean(latent_var))
+
+    all_latent_names = [f"z{i+1}" for i in range(len(latent_var))]
+    active_mask = latent_var > activity_threshold
+    active_latent_dims = [name for name, flag in zip(all_latent_names, active_mask) if flag]
+
+    logger.log(f"[Latent Summary] Mean variance across dims: {mean_var:.6f}")
+    logger.log(
+        f"[Latent Summary] Active latent dims (>{activity_threshold} var): "
+        f"{len(active_latent_dims)} / {len(all_latent_names)}"
+    )
+    logger.log(f"[Latent Summary] Active dims: {active_latent_dims}")
+
+    # Save variance profile
+    # var_df = pd.DataFrame({
+    #     "latent_dim": all_latent_names,
+    #     "variance": latent_var,
+    #     "active": active_mask.astype(int),
+    # })
+    # var_path = os.path.join(outdir, "latent_activity.tsv")
+    # var_df.to_csv(var_path, sep="\t", index=False)
+    # logger.log(f"Saved latent dimension activity to {var_path}")
+
+    # Optional plot
+    if plot:
+        try:
+            plt.figure(figsize=(10, 4))
+            plt.bar(range(len(latent_var)), latent_var)
+            plt.axhline(
+                y=plot_threshold_line,
+                color="red",
+                linestyle="--",
+                label="activity threshold"
+            )
+            plt.xlabel("Latent Dimension Index")
+            plt.ylabel("Variance of μ(x)")
+            plt.title("Latent Dimension Activity (VAE)")
+            plt.legend()
+            plt.tight_layout()
+            plot_path = os.path.join(outdir, "latent_activity.png")
+            plt.savefig(plot_path, dpi=300)
+            plt.close()
+            logger.log(f"Saved latent activity plot to {plot_path}")
+        except Exception as e:
+            logger.log(f"[warn] Could not generate latent activity plot: {e}")
+
+    return active_latent_dims
+
+
+def origin_plot(
+    adata,
+    color= "label",
+    save_path: str = "originplot.png",
+    n_pcs: int = 50,
+    n_neighbors: int = 30,
+    min_dist: float = 0.2,
+):
+    """
+    Compute PCA + UMAP on `adata` and save a UMAP plot.
+
+    Args:
+        adata: AnnData object.
+        color: One or more keys from `adata.obs` to color by (e.g. "label").
+               If None, no color is used.
+        save_path: Output path for the PNG file.
+        n_pcs: Number of principal components to use.
+        n_neighbors: Number of neighbors for the KNN graph.
+        min_dist: UMAP min_dist parameter.
+    """
+    # PCA
+    sc.tl.pca(adata, n_comps=n_pcs)
+
+    # Neighbors
+    sc.pp.neighbors(adata, n_neighbors=n_neighbors, use_rep="X_pca")
+
+    # UMAP embedding
+    sc.tl.umap(adata, min_dist=min_dist)
+
+    # UMAP plot (no blocking, so we can save with matplotlib)
+    sc.pl.umap(
+        adata,
+        color=color,
+        show=False,
+    )
+
+    plt.savefig(save_path, bbox_inches="tight", dpi=400)
+    plt.close()

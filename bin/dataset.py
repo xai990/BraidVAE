@@ -23,6 +23,7 @@ def load_txt_to_anndata(
     sep: str = "\t",
     drop_unknown: bool = True,
     has_header_labels: bool = False,
+    gene_list_path: Optional[str] = None,
 ) -> ad.AnnData:
     """
     Reads a samples×genes TSV and a label TSV, merges on sample IDs, returns AnnData.
@@ -47,6 +48,27 @@ def load_txt_to_anndata(
         cols = ["sample_id", label_col]
         df_lab.columns = cols
         sample_col_in_labels = "sample_id"
+    if gene_list_path is not None and os.path.exists(gene_list_path):
+        try:
+            gene_set_genes = set()
+            with open(gene_list_path, 'r') as file:
+                for line in file:
+                    parts = line.strip().split('\t')
+                    gene_set_name = parts[0]
+                    genes = [g.strip() for g in parts[1:] if g.strip()]
+                    gene_set_genes.update(genes)
+            logger.info(f" genes set : has {len(gene_set_genes)}")
+            common_genes = [g for g in df.columns if g in gene_set_genes]
+            logger.info(f"Filtering genes: kept {len(common_genes)} / {len(df.columns)} from list")
+
+            if len(common_genes) == 0:
+                logger.log("[warn] No overlap between gene set and data columns")
+            else:
+                df = df.loc[:, common_genes]
+        except Exception as e:
+            logger.log(f"[warn] Failed to apply gene list filter: {e}")
+
+    
     if drop_unknown:
         # build a normalized helper column for robust matching
         unknown_markers = {"unknown_tumor_type"}

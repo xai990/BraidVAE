@@ -1,4 +1,8 @@
-bin/__pycache__/
-results_multistage/
+bin/__pycache__/*
+results_multistage/*
 configs/
-datasets_breast/
+datasets_breast/*
+*.sh
+logs/
+run*
+results/

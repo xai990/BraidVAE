@@ -271,3 +271,183 @@ def train_vae_with_test_set(
     return history
 
 
+def train_single_vae(
+    train_adata: ad.AnnData,
+    test_adata: Optional[ad.AnnData] = None,
+    label_key: Optional[str] = "label",
+    latent_dim: int = 32,
+    hidden_dims: List[int] = (512, 256, 128),
+    dropout: float = 0.1,
+    batch_size: int = 16,
+    epochs: int = 200,
+    lr: float = 1e-3,
+    early_stop: int = 10,
+    warmup_epochs: int = 50,
+    outdir: str = "results_single_vae",
+    run_name: str = "all",
+) -> Dict[str, Dict]:
+    """
+    Train a single (conditional) VAE on the whole dataset (no per-stage split).
+
+    Args:
+        train_adata: AnnData with training samples.
+        test_adata:  Optional AnnData with test samples. If None or empty, will
+                     use train_adata for evaluation as well.
+        label_key:   Column in .obs to use as label for conditional VAE (and in
+                     latent output). Set to None for non-conditional.
+        latent_dim:  Latent dimension of the VAE.
+        hidden_dims: Hidden layer sizes.
+        dropout:     Dropout rate.
+        batch_size:  Batch size.
+        epochs:      Max number of epochs.
+        lr:          Learning rate.
+        early_stop:  Early stopping patience.
+        warmup_epochs: KL warmup epochs.
+        outdir:      Base output directory.
+        run_name:    Subdirectory name under outdir for this run.
+
+    Returns:
+        Dict with keys:
+          {
+            "history": <training history dict>,
+            "model_path": <path to best_vae.pth>,
+            "latent_path": <path to latent_all.tsv>,
+          }
+    """
+    # ----------------------------
+    # Prepare directories & device
+    # ----------------------------
+    run_dir = os.path.join(outdir, run_name) if run_name else outdir
+    _ensure_dir(run_dir)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.log(f"\n=== train_single_vae: run_dir={run_dir}, device={device} ===")
+
+    # ----------------------------
+    # Prepare test set
+    # ----------------------------
+    if test_adata is None or test_adata.n_obs == 0:
+        logger.log("[warn] No separate test_adata provided; using train as test.")
+        test_adata = train_adata
+
+    # ----------------------------
+    # Fit scaler on train, apply to both
+    # ----------------------------
+    scaler = PerGeneMinMaxScaler()
+    scaler.fit(_to_numpy(train_adata.X))
+
+    tr_loader, tr_ds = make_loader(
+        train_adata,
+        batch_size=batch_size,
+        shuffle=True,
+        label_key=label_key,
+        scaler=scaler,
+    )
+    te_loader, te_ds = make_loader(
+        test_adata,
+        batch_size=batch_size,
+        shuffle=False,
+        label_key=label_key,
+        scaler=scaler,
+    )
+
+    # ----------------------------
+    # Determine number of classes (for conditional VAE)
+    # ----------------------------
+    n_classes = 0
+    if label_key is not None and label_key in train_adata.obs.columns:
+        n_classes = len(pd.unique(train_adata.obs[label_key].astype(str)))
+    logger.log(f"n_classes for ConditionalVAE: {n_classes}")
+
+    # ----------------------------
+    # Build model
+    # ----------------------------
+    model = ConditionalVAE(
+        input_dim=train_adata.n_vars,
+        latent_dim=latent_dim,
+        hidden_dims=list(hidden_dims),
+        n_classes=n_classes,
+        dropout=dropout,
+    )
+
+    ckpt = os.path.join(run_dir, "best_vae.pth")
+    history = train_vae_with_test_set(
+        model,
+        tr_loader,
+        te_loader,
+        n_epochs=epochs,
+        learning_rate=lr,
+        device=device,
+        early_stopping_patience=early_stop,
+        warmup_epochs=warmup_epochs,
+        ckpt_path=ckpt,
+    )
+
+    # ----------------------------
+    # Reload best model and extract embeddings
+    # ----------------------------
+    model.load_state_dict(torch.load(ckpt, map_location=device))
+    model.to(device).eval()
+
+    # Train embeddings
+    Z_tr, names_tr, _ = extract_embeddings(model, tr_loader, device)
+    df_tr = pd.DataFrame(
+        Z_tr,
+        index=names_tr,
+        columns=[f"z{i+1}" for i in range(Z_tr.shape[1])]
+    )
+    df_tr["split"] = "train"
+    if label_key and label_key in train_adata.obs.columns:
+        df_tr[label_key] = train_adata.obs.loc[names_tr, label_key].values
+
+    # Test embeddings
+    if test_adata is not None and test_adata.n_obs > 0:
+        Z_te, names_te, _ = extract_embeddings(model, te_loader, device)
+        df_te = pd.DataFrame(
+            Z_te,
+            index=names_te,
+            columns=[f"z{i+1}" for i in range(Z_te.shape[1])]
+        )
+        df_te["split"] = "test"
+        if label_key and label_key in test_adata.obs.columns:
+            df_te[label_key] = test_adata.obs.loc[names_te, label_key].values
+        df_all = pd.concat([df_tr, df_te], axis=0)
+    else:
+        df_all = df_tr
+
+    latent_path = os.path.join(run_dir, "latent_all.tsv")
+    df_all.to_csv(latent_path, sep="\t")
+    logger.log(f"[save] Latent embeddings saved to {latent_path}")
+
+    # ----------------------------
+    # Visualization (optional)
+    # ----------------------------
+    try:
+        label_encoder = tr_ds.label_encoder if hasattr(tr_ds, "label_encoder") else None
+        label_names = label_encoder.classes_ if label_encoder is not None else None
+
+        # use all latent columns that start with "z"
+        latent_values = df_all.filter(regex=r"^z\d+").values
+
+        save_umap = os.path.join(run_dir, "latent_umap_all.png")
+        visualize_embeddings(
+            latent_values,
+            labels=df_all[label_key].values if label_key in df_all.columns else None,
+            label_names=label_names,
+            save_path=save_umap,
+        )
+        logger.log(f"[save] UMAP saved to {save_umap}")
+    except Exception as e:
+        logger.log(f"[warn] Failed to visualize embeddings in train_single_vae: {e}")
+
+    # ----------------------------
+    # Save history
+    # ----------------------------
+    with open(os.path.join(run_dir, "history.json"), "w") as f:
+        json.dump(history, f, indent=2)
+
+    return {
+        "history": history,
+        "model_path": ckpt,
+        "latent_path": latent_path,
+    }
