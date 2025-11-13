@@ -24,6 +24,7 @@ def load_txt_to_anndata(
     drop_unknown: bool = True,
     has_header_labels: bool = False,
     gene_list_path: Optional[str] = None,
+    min_class_size: int = 20,
 ) -> ad.AnnData:
     """
     Reads a samples×genes TSV and a label TSV, merges on sample IDs, returns AnnData.
@@ -80,7 +81,20 @@ def load_txt_to_anndata(
         )
         keep_mask = ~norm.isin(unknown_markers)
         df_lab = df_lab.loc[keep_mask].copy()
-    # merge
+    # drop label classes with fewer than `min_class_size` samples
+    if min_class_size is not None and min_class_size > 0:
+        counts = df_lab[label_col].value_counts()
+        keep_labels = counts[counts >= min_class_size].index
+        dropped_labels = counts[counts < min_class_size].index.tolist()
+
+        if len(dropped_labels) > 0:
+            logger.info(
+                f"Dropping classes with < {min_class_size} samples: "
+                f"{dropped_labels}"
+            )
+
+        df_lab = df_lab[df_lab[label_col].isin(keep_labels)].copy()
+    # merge by sample IDs
     df_lab = df_lab.set_index(sample_col_in_labels)
     df = df.loc[df.index.intersection(df_lab.index)].copy()
     obs = pd.DataFrame(index=df.index)
