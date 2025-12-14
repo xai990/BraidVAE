@@ -14,7 +14,7 @@ from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
 from . import logger 
 from .model import ConditionalVAE, VAELoss
-from .dataset import PerGeneMinMaxScaler, _to_numpy, make_loader 
+from .dataset import PerGeneMinMaxScaler, _to_numpy, make_loader, PerGeneZeroOneScaler
 from .utils import extract_embeddings,visualize_embeddings
 
 def _ensure_dir(path: str):
@@ -50,6 +50,7 @@ def train_multistage_vaes(
 
     # stages present in train; (optionally include those present only in test)
     stages = list(pd.unique(train_adata.obs[label_key]))
+    logger.log(f"The process stages data includes: {stages}")
     # add any test-only stages
     for s in pd.unique(test_adata.obs[label_key]):
         if s not in stages:
@@ -72,8 +73,9 @@ def train_multistage_vaes(
 
         # Fit scaler on train of this stage; apply to both
         scaler = PerGeneMinMaxScaler()
+        # scaler = PerGeneZeroOneScaler()
         scaler.fit(_to_numpy(tr_s.X))
-        tr_loader, tr_ds = make_loader(tr_s, batch_size, shuffle=True,  label_key=label_key, scaler=scaler)
+        tr_loader, tr_ds = make_loader(tr_s, batch_size, shuffle=False,  label_key=label_key, scaler=scaler)
         if te_s.n_obs > 0:
             te_loader, te_ds = make_loader(te_s, batch_size, shuffle=False, label_key=label_key, scaler=scaler)
         else:
@@ -271,6 +273,8 @@ def train_vae_with_test_set(
     return history
 
 
+
+
 def train_single_vae(
     train_adata: ad.AnnData,
     test_adata: Optional[ad.AnnData] = None,
@@ -339,7 +343,7 @@ def train_single_vae(
     tr_loader, tr_ds = make_loader(
         train_adata,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=False,
         label_key=label_key,
         scaler=scaler,
     )
@@ -451,3 +455,5 @@ def train_single_vae(
         "model_path": ckpt,
         "latent_path": latent_path,
     }
+
+

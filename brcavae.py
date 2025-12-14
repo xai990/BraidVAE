@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.preprocessing import LabelEncoder
 from bin.utils import extract_embeddings,visualize_embeddings,origin_plot,get_active_latent_dims
-from bin.dataset import load_txt_to_anndata, align_genes,preprocess_anndata
+from bin.dataset import load_txt_to_anndata, align_genes,preprocess_anndata, balance_anndata_by_label, balance_latent_df
 from bin import logger, dist_util
 import argparse
 from omegaconf import OmegaConf
@@ -40,7 +40,7 @@ def main(args):
     config = OmegaConf.merge(basic_conf, input_conf)
     logger.info(config)
     # load data 
-    logger.info(f"The args gene set is: {args.gene_set}")
+    logger.info(f"The args gene set is: {config.data.gene_list}")
 
     tr = load_txt_to_anndata(config.data.train_path, config.data.train_label_path,
                              label_col=config.data.label_col, gene_list_path = config.data.gene_list)
@@ -51,12 +51,17 @@ def main(args):
     
     logger.log(f"The info of tr:{tr.X.shape}")
     logger.log(f"The info of tr:{te.X.shape}")
+    
     # 3) Preprocess.
     tr_filter = preprocess_anndata(tr, nan_policy=config.data.filter)
     te_filter = preprocess_anndata(te, nan_policy=config.data.filter)
     tr_filter, te_filter = align_genes(tr_filter, te_filter)
+    # optinal balance the sample size
+    # tr_filter = balance_anndata_by_label(tr_filter,label_key="label",random_state=42,)
+    # te_filter = balance_anndata_by_label(te_filter,label_key="label",random_state=42,)
     # optinal visulize the original data
-    # origin_plot(tr_filter)
+    origin_plot(tr_filter)
+    
     # 4) Train one VAE per stage
     if config.train.multivae:
         logger.log("Train multi vaes for each stage data")
@@ -80,6 +85,20 @@ def main(args):
         if dfs:
             df_all = pd.concat(dfs, axis=0)
             logger.log(f"Combined {len(df_all)} samples from {len(dfs)} stages.")
+            latent_path = os.path.join(config.data.dir_out, "latent_all.tsv") 
+            df_all.to_csv(latent_path, sep="\t")                    
+            logger.log(f"[save] Latent embeddings saved to {latent_path}") 
+            if config.data.balance is not None:
+                df_all = balance_latent_df(
+                    df_all,
+                    label_col=config.data.label_col,
+                    random_state=42,
+                )
+            else:
+                logger.log(
+                    f"[warn] label_col '{config.data.label_col}' not found in latent DF. "
+                    "Skipping latent balancing."
+                )
             # visualize global UMAP
             visualize_embeddings(
                 df_all.iloc[:, :-3].values,  # exclude meta columns
@@ -112,6 +131,7 @@ def main(args):
     #     label_names=np.unique(df_all[config.data.label_col].values) if config.data.label_col in df_all.columns else None,
     #     save_path= os.path.join(config.data.dir_out, "globaldrop_umap.png")
     # )
+    
     logger.log("process complete")
 
 
@@ -120,21 +140,22 @@ def create_config():
     defaults = {
         "data":{
             "data_dir": None,
-            "dir_out": "results_multistage",
+            "dir_out": "results_multistagecoad",
             "gene_selection": None,
             "samples":124,
             "drop_fraction":0,
             "random": False,
             "label_col": "label",
             "filter":"drop",
-            "gene_list": None
+            "gene_list": None,
+            "balance": None
         },
         "train":{
             "batch_size":16,
-            "latent_dim":128,
+            "latent_dim":8,
             "epochs":200,
             "multivae":True,
-            "hidden_dims":[1024, 512, 256]
+            "hidden_dims":[256, 128, 64]
         },
         
     }

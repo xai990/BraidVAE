@@ -24,7 +24,7 @@ def load_txt_to_anndata(
     drop_unknown: bool = True,
     has_header_labels: bool = False,
     gene_list_path: Optional[str] = None,
-    min_class_size: int = 20,
+    min_class_size: int = 1,
 ) -> ad.AnnData:
     """
     Reads a samples×genes TSV and a label TSV, merges on sample IDs, returns AnnData.
@@ -81,7 +81,7 @@ def load_txt_to_anndata(
         )
         keep_mask = ~norm.isin(unknown_markers)
         df_lab = df_lab.loc[keep_mask].copy()
-    # drop label classes with fewer than `min_class_size` samples
+    
     if min_class_size is not None and min_class_size > 0:
         counts = df_lab[label_col].value_counts()
         keep_labels = counts[counts >= min_class_size].index
@@ -94,7 +94,8 @@ def load_txt_to_anndata(
             )
 
         df_lab = df_lab[df_lab[label_col].isin(keep_labels)].copy()
-    # merge by sample IDs
+    
+    # merge
     df_lab = df_lab.set_index(sample_col_in_labels)
     df = df.loc[df.index.intersection(df_lab.index)].copy()
     obs = pd.DataFrame(index=df.index)
@@ -119,40 +120,81 @@ def align_genes(train_adata: ad.AnnData, test_adata: ad.AnnData) -> Tuple[ad.Ann
 class PerGeneMinMaxScaler:
     """
     Fit on train (per stage) and transform train/test with the same params.
-    Scales each gene to [-1, 1].
+    Scales each gene to [-1, 1]. Handles constant genes safely.
     """
     def __init__(self):
         self.min_ = None
         self.max_ = None
+        self.range_ = None
 
     def fit(self, X: np.ndarray):
         self.min_ = np.nanmin(X, axis=0)
         self.max_ = np.nanmax(X, axis=0)
-        # avoid zero range
-        eps = 1e-12
+        
+        # Handle non-finite values (Inf/NaN)
         self.max_ = np.where(np.isfinite(self.max_), self.max_, 0.0)
         self.min_ = np.where(np.isfinite(self.min_), self.min_, 0.0)
-        self.range_ = np.maximum(self.max_ - self.min_, eps)
+        
+        # FIX: If max - min is near zero (constant gene), set range to 1.0 
+        # to prevent division by epsilon (explosion).
+        diff = self.max_ - self.min_
+        eps = 1e-12
+        self.range_ = np.where(diff < eps, 1.0, diff)
 
     def transform(self, X: np.ndarray) -> np.ndarray:
         Z = (X - self.min_) / self.range_
         return (Z * 2.0 - 1.0).astype(np.float32)
 
 
+class PerGeneZeroOneScaler:
+    """
+    Fit on train (per stage) and transform train/test with the same params.
+    Scales each gene to [0, 1]. Handles constant genes safely.
+    """
+    def __init__(self):
+        self.min_ = None
+        self.max_ = None
+        self.range_ = None
+
+    def fit(self, X: np.ndarray):
+        self.min_ = np.nanmin(X, axis=0)
+        self.max_ = np.nanmax(X, axis=0)
+        
+        self.max_ = np.where(np.isfinite(self.max_), self.max_, 0.0)
+        self.min_ = np.where(np.isfinite(self.min_), self.min_, 0.0)
+        
+        # FIX: Prevent explosion for constant genes
+        diff = self.max_ - self.min_
+        eps = 1e-12
+        self.range_ = np.where(diff < eps, 1.0, diff)
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        Z = (X - self.min_) / self.range_
+        return Z.astype(np.float32)
+
 
 def preprocess_anndata(
     adata: ad.AnnData,
-    nan_policy: str = "drop"   # "replace" or "drop"
+    nan_policy: str = "drop",   # "replace" or "drop"
+    transform: bool = False,     # apply exp/log1p transformation
 ) -> ad.AnnData:
     X = _to_numpy(adata.X).astype(np.float32)
+
+    # Handle NaNs
     if nan_policy == "drop":
         keep = ~np.isnan(X).any(axis=0)
         adata = adata[:, keep].copy()
-        X = X[:, keep]  # ensure same shape
+        X = X[:, keep]
+    elif nan_policy == "replace":
+        X = np.where(np.isnan(X), -np.inf, X).astype(np.float32)
     else:
-        X = np.nan_to_num(X, nan=0)
+        X = np.nan_to_num(X, nan=0.0).astype(np.float32)
 
-    adata.X = X.astype(np.float32)
+    # Apply transformation: exp then log1p (log(1 + exp(x)))
+    if transform:
+        X = np.log1p(np.exp(X)).astype(np.float32)
+
+    adata.X = X
     return adata
 
 
@@ -196,7 +238,7 @@ class AnnDataGeneDataset(Dataset):
         y = torch.tensor(self.y[idx], dtype=torch.long)
         return x, y
 
-def make_loader(adata: ad.AnnData, batch_size: int, shuffle: bool, label_key: Optional[str], scaler: Optional[PerGeneMinMaxScaler]):
+def make_loader(adata: ad.AnnData, batch_size: int, shuffle: bool, label_key: Optional[str] = None, scaler: Optional[PerGeneMinMaxScaler]=None):
     ds = AnnDataGeneDataset(adata, label_key=label_key, scaler=scaler)
     return DataLoader(ds, batch_size=batch_size, shuffle=shuffle, num_workers=0), ds
 
@@ -210,3 +252,101 @@ def _to_numpy(x):
     except Exception:
         pass
     return np.asarray(x)
+
+
+
+def balance_anndata_by_label(
+    adata: ad.AnnData,
+    label_key: str = "label",
+    random_state: Optional[int] = 0,
+) -> ad.AnnData:
+    """
+    Balance the dataset by downsampling each class to the size of the smallest class.
+
+    - adata.obs[label_key] must exist.
+    - Returns a NEW AnnData with balanced samples.
+    """
+    if label_key not in adata.obs.columns:
+        raise ValueError(f"Column '{label_key}' not found in adata.obs.")
+
+    labels = adata.obs[label_key].astype(str)
+    counts = labels.value_counts()
+
+    if counts.empty:
+        raise ValueError("No labels found to balance.")
+
+    # smallest class size
+    target_n = counts.min()
+    logger.info(f"[balance] Class counts before: {counts.to_dict()}")
+    logger.info(f"[balance] Target samples per class = {target_n}")
+
+    # random generator
+    rng = np.random.default_rng(random_state)
+
+    keep_indices = []
+
+    for cls, n_cls in counts.items():
+        cls_mask = (labels == cls).values
+        cls_idx = np.nonzero(cls_mask)[0]
+
+        if n_cls <= target_n:
+            # already at or below target; keep all
+            chosen = cls_idx
+        else:
+            # randomly choose target_n samples from this class
+            chosen = rng.choice(cls_idx, size=target_n, replace=False)
+
+        keep_indices.append(chosen)
+
+    keep_indices = np.concatenate(keep_indices)
+    # shuffle final order
+    rng.shuffle(keep_indices)
+
+    balanced = adata[keep_indices].copy()
+
+    # log new counts
+    new_counts = balanced.obs[label_key].value_counts()
+    logger.info(f"[balance] Class counts after: {new_counts.to_dict()}")
+
+    return balanced
+
+
+def balance_latent_df(
+    df: pd.DataFrame,
+    label_col: str,
+    random_state: int = 42,
+) -> pd.DataFrame:
+    """
+    Balance latent embeddings by downsampling each class (label_col)
+    to the size of the smallest class.
+    """
+    if label_col not in df.columns:
+        raise ValueError(f"[balance_latent_df] '{label_col}' not found in columns: {df.columns.tolist()}")
+
+    counts = df[label_col].value_counts()
+    if counts.empty:
+        raise ValueError("[balance_latent_df] No labels found to balance.")
+
+    target_n = counts.min()
+    logger.info(f"[balance_latent_df] Class counts before: {counts.to_dict()}")
+    logger.info(f"[balance_latent_df] Target samples per class = {target_n}")
+
+    rng = np.random.default_rng(random_state)
+    keep_indices = []
+
+    for cls, n_cls in counts.items():
+        cls_idx = df.index[df[label_col] == cls].to_numpy()
+        if n_cls <= target_n:
+            chosen = cls_idx
+        else:
+            chosen = rng.choice(cls_idx, size=target_n, replace=False)
+        keep_indices.append(chosen)
+
+    keep_indices = np.concatenate(keep_indices)
+    rng.shuffle(keep_indices)
+
+    df_bal = df.loc[keep_indices].copy()
+    new_counts = df_bal[label_col].value_counts()
+    logger.info(f"[balance_latent_df] Class counts after: {new_counts.to_dict()}")
+
+    return df_bal
