@@ -457,3 +457,125 @@ def train_single_vae(
     }
 
 
+
+def pearson_correlation(x, y):
+    """Differentiable Pearson Correlation for Loss Function"""
+    vx = x - torch.mean(x)
+    vy = y - torch.mean(y)
+    cost = torch.sum(vx * vy) / (torch.sqrt(torch.sum(vx ** 2)) * torch.sqrt(torch.sum(vy ** 2)) + 1e-8)
+    return cost
+
+def train_trajectory_vae(
+    df_all: pd.DataFrame,
+    label_col: str = "stage",
+    latent_dim: int = 8,
+    hidden_dims: List[int] = [64, 32],
+    batch_size: int = 32,
+    epochs: int = 100,
+    lr: float = 1e-3,
+    outdir: str = "results_trajectory",
+    time_reg_weight: float = 5.0  # <--- Strong weight to force order
+):
+    """
+    Trains the 'Large VAE' on top of the existing embeddings to fix the order.
+    """
+    from .model import ConditionalVAE, VAELoss
+    from .dataset import LatentDataset, make_loader # Ensure these are imported
+    
+    os.makedirs(outdir, exist_ok=True)
+    logger.log("\n=== Training Trajectory VAE (Large VAE) ===")
+
+    # 1. Create Dataset
+    ds = LatentDataset(df_all, label_col=label_col)
+    loader = DataLoader(ds, batch_size=batch_size, shuffle=True)
+    
+    # 2. Initialize Model
+    # Input dim is the number of Z columns from the previous step
+    input_dim = ds.X.shape[1]
+    
+    # We use n_classes=0 because we don't want a conditional VAE here,
+    # we want the VAE to LEARN the trajectory into the latent space itself.
+    model = ConditionalVAE(
+        input_dim=input_dim,
+        latent_dim=latent_dim,
+        hidden_dims=hidden_dims,
+        n_classes=0 
+    )
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = model.to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    criterion = VAELoss()
+    
+    # 3. Training Loop
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0
+        total_time_corr = 0
+        
+        for x, y_time in loader:
+            x = x.to(device)
+            y_time = y_time.to(device) # These are the normalized stage labels (0.0 to 1.0)
+            
+            optimizer.zero_grad()
+            
+            # Forward pass
+            recon, inp, mu, logvar, z, _ = model(x) # z is the new "Trajectory Embedding"
+            
+            # Standard VAE Loss
+            vae_loss, _ = criterion(recon, inp, mu, logvar)
+            
+            # --- THE FIX: Time-Correlation Regularization ---
+            # We want the 1st dimension of Z (z[:,0]) to correlate with Time (y_time)
+            # This forces the manifold to unfold along the stage order 1->2->3->4->5
+            
+            # Calculate correlation (we want 1.0 or -1.0)
+            corr = pearson_correlation(z[:, 0], y_time)
+            
+            # Loss is: minimize (1 - correlation^2). 
+            # This forces strong correlation (either positive or negative order)
+            time_loss = 1.0 - (corr ** 2)
+            
+            # Total Loss
+            loss = vae_loss + (time_reg_weight * time_loss)
+            
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            total_time_corr += corr.item()
+
+        if (epoch + 1) % 10 == 0:
+            avg_corr = total_time_corr / len(loader)
+            logger.log(f"Epoch {epoch+1} | Loss: {total_loss:.4f} | Time Correlation: {avg_corr:.4f}")
+
+    # 4. Extract Final Trajectory Embeddings
+    model.eval()
+    all_z = []
+    with torch.no_grad():
+        # Use a non-shuffled loader for extraction
+        extract_loader = DataLoader(ds, batch_size=batch_size, shuffle=False)
+        for x, _ in extract_loader:
+            x = x.to(device)
+            _, _, _, _, z, _ = model(x)
+            all_z.append(z.cpu().numpy())
+            
+    final_z = np.concatenate(all_z, axis=0)
+    
+    # Create DataFrame
+    df_traj = pd.DataFrame(
+        final_z, 
+        index=df_all.index, 
+        columns=[f"traj_z{i+1}" for i in range(latent_dim)]
+    )
+    
+    # Add back metadata
+    for col in df_all.columns:
+        if not col.startswith("z"): # Copy metadata but not old z-vectors
+            df_traj[col] = df_all[col]
+
+    save_path = os.path.join(outdir, "trajectory_embeddings.tsv")
+    df_traj.to_csv(save_path, sep="\t")
+    logger.log(f"[save] Trajectory embeddings saved to {save_path}")
+    
+    return df_traj

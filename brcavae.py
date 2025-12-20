@@ -15,8 +15,8 @@ from omegaconf import OmegaConf
 from bin.train_utils import train_multistage_vaes, train_single_vae
 import glob
 import os
-
-
+from bin.train_utils import train_multistage_vaes, train_single_vae, train_trajectory_vae
+from bin.utils import seed_everything
 
 
 def main(args):
@@ -33,6 +33,7 @@ def main(args):
     logger.log("log configure")
     # Setup distributed training environment
     dist_util.setup_dist()
+    seed_everything(42)
     logger.log(f"device information:{dist_util.dev()}")
     # Create and merge configuration files
     basic_conf = create_config()
@@ -99,6 +100,7 @@ def main(args):
                     f"[warn] label_col '{config.data.label_col}' not found in latent DF. "
                     "Skipping latent balancing."
                 )
+            
             # visualize global UMAP
             visualize_embeddings(
                 df_all.iloc[:, :-3].values,  # exclude meta columns
@@ -107,6 +109,31 @@ def main(args):
                 save_path= os.path.join(config.data.dir_out, "global_umap.png")
             )
             logger.log(f"The results are save to:{config.data.dir_out}")
+            logger.log("\n**********************************")
+            logger.log("Start Training Trajectory VAE to fix Order (1-2-3-4-5)")
+            
+            # Ensure we have a stage column. 
+            # Note: your code creates 'stage' column in the loop: df["stage"] = ...
+            
+            df_trajectory = train_trajectory_vae(
+                df_all,
+                label_col="label",      # This must match the column name you created
+                latent_dim=2,           # Smaller dim for the trajectory is usually better
+                hidden_dims=[32, 16],   # Small network since input is just embeddings
+                # hidden_dims=[16, 8],   # Small network since input is just embeddings
+                epochs=150,
+                outdir=os.path.join(config.data.dir_out, "trajectory_model"),
+                time_reg_weight=50.0    # High weight to enforce order
+            )
+            
+            # Visualize the NEW trajectory embeddings
+            visualize_embeddings(
+                df_trajectory.filter(regex=r"^traj_z").values,
+                labels=df_trajectory[config.data.label_col].values,
+                label_names=np.unique(df_trajectory[config.data.label_col].values),
+                save_path=os.path.join(config.data.dir_out, "trajectory_umap.png")
+            )
+            logger.log("Trajectory visualization saved.")
     else:
         logger.log("Train single vae using all stage data")
         # Train a single VAE on all samples (no per-stage split)
@@ -140,7 +167,7 @@ def create_config():
     defaults = {
         "data":{
             "data_dir": None,
-            "dir_out": "results_multistagecoad",
+            "dir_out": "results_multistage",
             "gene_selection": None,
             "samples":124,
             "drop_fraction":0,

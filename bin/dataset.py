@@ -24,7 +24,7 @@ def load_txt_to_anndata(
     drop_unknown: bool = True,
     has_header_labels: bool = False,
     gene_list_path: Optional[str] = None,
-    min_class_size: int = 1,
+    min_class_size: int = 20,
 ) -> ad.AnnData:
     """
     Reads a samples×genes TSV and a label TSV, merges on sample IDs, returns AnnData.
@@ -176,7 +176,7 @@ class PerGeneZeroOneScaler:
 def preprocess_anndata(
     adata: ad.AnnData,
     nan_policy: str = "drop",   # "replace" or "drop"
-    transform: bool = False,     # apply exp/log1p transformation
+    transform: bool = True,     # apply exp/log1p transformation
 ) -> ad.AnnData:
     X = _to_numpy(adata.X).astype(np.float32)
 
@@ -350,3 +350,54 @@ def balance_latent_df(
     logger.info(f"[balance_latent_df] Class counts after: {new_counts.to_dict()}")
 
     return df_bal
+
+
+class LatentDataset(Dataset):
+    """
+    Dataset for the 'Large VAE' (Trajectory VAE).
+    Maps specific string labels to a continuous time value.
+    """
+    def __init__(self, df: pd.DataFrame, label_col: str = "stage"):
+        # Filter only latent columns (z1, z2...)
+        self.X = df.filter(regex=r"^z\d+").values.astype(np.float32)
+        
+        # --- DEFINE YOUR ORDER HERE ---
+        # We map 'normal' to 0, Stage I to 1, etc.
+        # Both GTEX and TCGA normal are treated as timepoint 0 (start).
+        label_mapping = {
+            'normal_GTEX': 0.0,
+            'normal_TCGA': 0.6,   # You can make this 0.1 if you want to separate them slightly
+            'Stage_I': 1.0,
+            'Stage_II': 2.0,
+            'Stage_III': 3.0,
+            'Stage_IV': 4.0       # Added just in case
+        }
+        
+        # Create a default for unknown labels (put them at end or -1)
+        # using .map to apply the dictionary
+        clean_labels = df[label_col].astype(str).str.strip()
+        
+        # Check if any labels are missing from our map
+        unique_labels = clean_labels.unique()
+        for l in unique_labels:
+            if l not in label_mapping:
+                logger.log(f"[Warning] Label '{l}' not found in time mapping! Defaulting to -1.")
+                
+        mapped_values = clean_labels.map(label_mapping).fillna(-1.0).values
+        
+        self.y = mapped_values.astype(np.float32)
+            
+        # Normalize labels to 0-1 range for stable training
+        # If min is 0 and max is 3, this makes them 0.0, 0.33, 0.66, 1.0
+        min_val = np.min(self.y[self.y >= 0]) # Ignore -1s for min calc
+        max_val = np.max(self.y)
+        
+        self.y_norm = (self.y - min_val) / (max_val - min_val + 1e-6)
+        
+    def __len__(self):
+        return self.X.shape[0]
+
+    def __getitem__(self, idx):
+        x = torch.tensor(self.X[idx])
+        y = torch.tensor(self.y_norm[idx], dtype=torch.float32) 
+        return x, y
