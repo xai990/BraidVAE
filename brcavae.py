@@ -109,31 +109,33 @@ def main(args):
                 save_path= os.path.join(config.data.dir_out, "global_umap.png")
             )
             logger.log(f"The results are save to:{config.data.dir_out}")
-            logger.log("\n**********************************")
-            logger.log("Start Training Trajectory VAE to fix Order (1-2-3-4-5)")
             
             # Ensure we have a stage column. 
             # Note: your code creates 'stage' column in the loop: df["stage"] = ...
+            if args.time_sup:
+                logger.log("\n**********************************")
+                logger.log("Start Training Trajectory VAE to fix Order (1-2-3-4-5)")
             
-            df_trajectory = train_trajectory_vae(
-                df_all,
-                label_col="label",      # This must match the column name you created
-                latent_dim=2,           # Smaller dim for the trajectory is usually better
-                hidden_dims=[32, 16],   # Small network since input is just embeddings
-                # hidden_dims=[16, 8],   # Small network since input is just embeddings
-                epochs=150,
-                outdir=os.path.join(config.data.dir_out, "trajectory_model"),
-                time_reg_weight=50.0    # High weight to enforce order
-            )
-            
-            # Visualize the NEW trajectory embeddings
-            visualize_embeddings(
-                df_trajectory.filter(regex=r"^traj_z").values,
-                labels=df_trajectory[config.data.label_col].values,
-                label_names=np.unique(df_trajectory[config.data.label_col].values),
-                save_path=os.path.join(config.data.dir_out, "trajectory_umap.png")
-            )
-            logger.log("Trajectory visualization saved.")
+                df_trajectory = train_trajectory_vae(
+                    df_all,
+                    label_col="label",      # This must match the column name you created
+                    latent_dim=2,           # Smaller dim for the trajectory is usually better
+                    # hidden_dims=[32, 16],   # Small network since input is just embeddings
+                    hidden_dims=[16, 8],   # Small network since input is just embeddings
+                    # hidden_dims=[8, 4],
+                    epochs=150,
+                    outdir=os.path.join(config.data.dir_out, "trajectory_model"),
+                    time_reg_weight=50.0    # High weight to enforce order
+                )
+                
+                # Visualize the NEW trajectory embeddings
+                visualize_embeddings(
+                    df_trajectory.filter(regex=r"^traj_z").values,
+                    labels=df_trajectory[config.data.label_col].values,
+                    label_names=np.unique(df_trajectory[config.data.label_col].values),
+                    save_path=os.path.join(config.data.dir_out, "trajectory_umap.png")
+                )
+                logger.log("Trajectory visualization saved.")
     else:
         logger.log("Train single vae using all stage data")
         # Train a single VAE on all samples (no per-stage split)
@@ -194,5 +196,6 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, default="configs/config.yaml")
     parser.add_argument("--dir", type=str, default=None)
     parser.add_argument("--gene_set", type=str, default="Random")
+    parser.add_argument("--time_sup", action='store_true')
     args = parser.parse_args()
     main(args)
