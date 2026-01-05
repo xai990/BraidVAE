@@ -8,6 +8,7 @@ from umap import UMAP
 import pandas as pd 
 import scanpy as sc
 import os 
+import random
 # ===================== Embedding Extraction and Visualization =====================
 def extract_embeddings(model, 
                       data_loader,
@@ -71,7 +72,8 @@ def extract_embeddings(model,
 def visualize_embeddings(embeddings, 
                         labels= None,
                         label_names= None,
-                        save_path = None):
+                        save_path = None,
+                        coord_save_path = None):
     """
     Visualize embeddings using UMAP or t-SNE
     
@@ -81,6 +83,7 @@ def visualize_embeddings(embeddings,
         label_names: Names of classes
         method: Visualization method ('umap' or 'tsne')
         save_path: Path to save figure
+        coord_save_path: Path to save the umap coordinates
     """
    
     
@@ -89,7 +92,12 @@ def visualize_embeddings(embeddings,
 
     reducer = UMAP(n_neighbors=30, min_dist=0.2, random_state=42)
     embeddings_2d = reducer.fit_transform(embeddings)
-    
+    if coord_save_path:
+        df = pd.DataFrame(embeddings_2d, columns=['UMAP_1', 'UMAP_2'])
+        if labels is not None:
+            df['label'] = labels
+        df.to_csv(coord_save_path, index=False)
+        print(f"Coordinates saved to {coord_save_path}")
     # Plot
     plt.figure(figsize=(10, 8))
     
@@ -233,3 +241,19 @@ def origin_plot(
 
     plt.savefig(save_path, bbox_inches="tight", dpi=400)
     plt.close()
+
+
+def seed_everything(seed=42):
+    """Locks all random seeds for reproducibility."""
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    th.manual_seed(seed)
+    th.cuda.manual_seed(seed)
+    th.cuda.manual_seed_all(seed)
+    
+    # These two lines force predictable (but slower) algorithms on the GPU
+    th.backends.cudnn.deterministic = True
+    th.backends.cudnn.benchmark = False
+    
+    print(f"Global seed set to {seed}")
