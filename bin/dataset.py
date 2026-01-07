@@ -101,7 +101,11 @@ def load_txt_to_anndata(
     obs = pd.DataFrame(index=df.index)
     if label_col in df_lab.columns:
         obs[label_col] = df_lab.loc[obs.index, label_col].astype(str).values
-
+    if label_col in obs.columns:
+        final_counts = obs[label_col].value_counts()
+        logger.info(f"Final Data Distribution ({len(obs)} total samples):")
+        for label, count in final_counts.items():
+            logger.info(f"  - {label}: {count}")
     adata = ad.AnnData(X=df.values.astype(np.float32))
     adata.obs = obs
     adata.var = pd.DataFrame(index=df.columns)
