@@ -14,11 +14,11 @@ import argparse
 from omegaconf import OmegaConf
 # Importing all necessary training functions
 from bin.train_utils import (
-    train_multistage_vaes, 
-    train_single_vae, 
-    train_trajectory_vae, 
-    train_gene_transformer, 
-    train_latent_transformer
+    train_multistage_vaes,
+    train_single_vae,
+    train_trajectory_vae,
+    train_gene_transformer,
+    train_latent_transformer,
 )
 import glob
 import os
@@ -44,10 +44,7 @@ def main(args):
     basic_conf = create_config()
     input_conf = OmegaConf.load(args.config)
     config = OmegaConf.merge(basic_conf, input_conf)
-    
-    # Override config with args if provided
-    if args.model_type:
-        config.train.model_type = args.model_type
+
         
     logger.info(config)
     
@@ -77,55 +74,8 @@ def main(args):
     # =========================================================
     # 3) Train Logic Switch
     # =========================================================
-    
-    # A. DIRECT TRANSFORMER (Genes -> Class)
-    if config.train.model_type == "transformer":
-        logger.log("Train Gene Transformer (Informer-like Encoder) on RAW GENES")
-        summary = train_gene_transformer(
-            train_adata=tr_filter,
-            test_adata=te_filter,
-            label_key=config.data.label_col,
-            top_k=config.train.top_k,
-            d_model=config.train.d_model,
-            batch_size=config.train.batch_size,
-            epochs=config.train.epochs,
-            lr=config.train.lr if 'lr' in config.train else 1e-3,
-            outdir=config.data.dir_out
-        )
-        logger.log("Transformer training complete.")
 
-    # B. TRANSFORMER ON LATENT (Genes -> VAE -> Latent -> Transformer -> Class)
-    elif config.train.model_type == "transformer_on_latent":
-        logger.log("Pipeline: Multi-VAE -> Latent Aggregation -> Transformer Distillation")
-        
-        # Step 1: Train Multi-VAEs (One per stage)
-        df_all, summary = train_multistage_vaes(
-            tr_filter, te_filter,
-            label_key=config.data.label_col,
-            latent_dim=config.train.latent_dim,
-            hidden_dims=config.train.hidden_dims,
-            batch_size=config.train.batch_size,
-            epochs=config.train.epochs,
-            outdir=config.data.dir_out
-        )
-        
-        # Step 2: Train Transformer on the aggregated Latents
-        logger.log("Training Transformer on VAE Latents...")
-        df_distilled = train_latent_transformer(
-            latent_df=df_all,
-            label_key=config.data.label_col,
-            d_model=64,             # Internal dim for the small transformer
-            nhead=4,
-            num_layers=2,
-            keep_ratio=0.5,         # Keep top 50% of latent dims
-            batch_size=32,
-            epochs=100,
-            outdir=os.path.join(config.data.dir_out, "transformer_latent_results")
-        )
-        logger.log("Latent Transformer pipeline complete.")
-
-    # C. STANDARD VAE PIPELINE (Multi-VAE + Distillation + Trajectory)
-    elif config.train.multivae:
+    if config.train.multivae:
         logger.log("Train multi vaes for each stage data (Standard Pipeline)")
         
         # Step 1: Train & Aggregate
@@ -155,7 +105,7 @@ def main(args):
             label_names=np.unique(df_all[config.data.label_col].values) if config.data.label_col in df_all.columns else None,
             save_path= os.path.join(config.data.dir_out, "global_umap.png")
         )
-        
+        """
         # =========================================================
         # Step 4: Transformer Select Latent (Distillation)
         # =========================================================
@@ -165,12 +115,12 @@ def main(args):
         df_distilled = train_latent_transformer(
             latent_df=df_all,
             label_key=config.data.label_col,
-            d_model=64,             
-            nhead=4,
-            num_layers=2,
+            d_model=config.train.d_model,             
+            nhead=config.train.nhead,
+            num_layers=config.train.num_layers,
             keep_ratio=0.5,         
             batch_size=32,
-            epochs=100,
+            epochs=config.train.epochs,
             outdir=os.path.join(config.data.dir_out, "step4_transformer_distill")
         )
         logger.log("Latent distillation complete.")
@@ -207,7 +157,7 @@ def main(args):
                 logger.log("Trajectory visualization saved.")
             else:
                 logger.log("[ERROR] No trajectory columns found (traj_z) to visualize. Skipping UMAP.")
-
+            """
     # D. SINGLE VAE
     else:
         logger.log("Train single vae using all stage data")
@@ -223,6 +173,13 @@ def main(args):
             warmup_epochs=50,
             outdir=config.data.dir_out,
             run_name="single_vae",
+        )
+        df_all = single_summary["latent"]
+        visualize_embeddings(
+            df_all.filter(regex="^z\d+").values, 
+            labels=df_all[config.data.label_col].values if config.data.label_col in df_all.columns else None,
+            label_names=np.unique(df_all[config.data.label_col].values) if config.data.label_col in df_all.columns else None,
+            save_path= os.path.join(config.data.dir_out, "global_umap.png")
         )
     
     logger.log("process complete")
@@ -248,9 +205,10 @@ def create_config():
             "epochs":200,
             "multivae":True,
             "hidden_dims":[256, 128, 64],
-            "model_type": "vae",     # "vae", "transformer", or "transformer_on_latent"
             "top_k": 512,            # For transformer
             "d_model": 256,          # For transformer
+            "nhead": 2,              # For transformer
+            "num_layers": 2,         # For transformer
             "lr": 1e-3
         },
         
@@ -264,6 +222,5 @@ if __name__ == "__main__":
     parser.add_argument("--dir", type=str, default=None)
     parser.add_argument("--gene_set", type=str, default="Random")
     parser.add_argument("--time_sup", action='store_true')
-    parser.add_argument("--model_type", type=str, default=None, help="vae, transformer, or transformer_on_latent")
     args = parser.parse_args()
     main(args)

@@ -101,15 +101,39 @@ def visualize_embeddings(embeddings,
     # Plot
     plt.figure(figsize=(10, 8))
     
+    # Define consistent stage color mapping
+    STAGE_COLORS = {
+        'Normal': '#1f77b4',      # blue
+        'Stage I': '#ff7f0e',     # orange
+        'Stage IIA': '#2ca02c',   # green
+        'Stage IIB': '#d62728',   # red
+        'Stage III': '#9467bd',   # purple
+        'Stage IIIA': '#8c564b',  # brown
+        'Unknown': '#7f7f7f',     # gray
+    }
+    
     if labels is not None:
         unique_labels = np.unique(labels)
-        colors = plt.cm.tab10(np.linspace(0, 1, len(unique_labels)))
         
-        for i, label in enumerate(unique_labels):
-            mask = labels == label
-            label_name = label_names[i] if label_names is not None else str(label)
-            plt.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], 
-                       c=[colors[i]], label=label_name, alpha=0.6, s=20)
+        # Use consistent stage colors if label names match stage patterns
+        use_stage_colors = False
+        if label_names is not None:
+            use_stage_colors = any(name in STAGE_COLORS for name in label_names)
+        
+        if use_stage_colors and label_names is not None:
+            for i, label in enumerate(unique_labels):
+                mask = labels == label
+                label_name = label_names[i] if label_names is not None else str(label)
+                color = STAGE_COLORS.get(label_name, '#7f7f7f')
+                plt.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], 
+                           c=[color], label=label_name, alpha=0.6, s=20)
+        else:
+            colors = plt.cm.tab10(np.linspace(0, 1, len(unique_labels)))
+            for i, label in enumerate(unique_labels):
+                mask = labels == label
+                label_name = label_names[i] if label_names is not None else str(label)
+                plt.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], 
+                           c=[colors[i]], label=label_name, alpha=0.6, s=20)
         
         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     else:

@@ -304,7 +304,8 @@ def train_single_vae(
     latent_path = os.path.join(run_dir, "latent_all.tsv")
     df_all.to_csv(latent_path, sep="\t")
 
-    return {"history": history, "model_path": ckpt, "latent_path": latent_path}
+    return {"history": history, "model_path": ckpt, "latent": df_all}
+
 
 # ===================== 4. Transformer on Latent (Step 4) =====================
 

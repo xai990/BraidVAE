@@ -1,8 +1,70 @@
 bin/__pycache__/*
 results_multistage/*
-configs/
 datasets_breast/*
 *.sh
 logs/
 run*
 results/
+
+# Results & outputs
+results*/
+outputs/
+figures/
+plots/
+*.png
+*.pdf
+*.svg
+*.html
+*.csv
+*.tsv
+*.h5
+*.h5ad
+*.loom
+*.npy
+*.npz
+*.pkl
+*.pt
+*.pth
+*.ckpt
+*.log
+
+# QC / standard-check / utility scripts
+scripts/qc/
+scripts/checks/
+scripts/benchmarks/
+lint_*.py
+check_*.py
+qc_*.py
+validate_*.py
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Data files
+data/
+raw/
+processed/
+*.fastq
+*.bam
+*.bed
+*.gtf
+*.fasta
+
+# Python environment & cache
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# System & IDE files
+.DS_Store
+.idea/
+.vscode/
+*.swp
