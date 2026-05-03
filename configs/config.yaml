@@ -4,32 +4,9 @@ data:
   test_path: "datasets_breast/breast_test_GEM_transpose.txt"
   test_label_path: "datasets_breast/test_stage_labels_new_updated.txt"
   gene_list: "datasets_breast/hallmark_allgene_transposed.txt"
-  # gene_list: "datasets_breast/random_307_genes.txt"
-  # gene_list: "datasets_breast/coregene307.txt"
   filter: "replace"
 train:
   hidden_dims: [1024, 256, 64]
   latent_dim: 32
 
 
-
-### coregene 307
-# hidden_dims: [128, 64, 32]
-# latent_dim: 8
-# [8,4]
-# 2
-
-### allgene
-# hidden_1024_512_latent_128drop
-# hidden_512_256_latent_128replace
-# hidden_dims: [512, 256, 128]
-# latent_dim: 32
-# [32,16]
-# 2
-
-### hallmark gene
-# hidden_1024_256_64_latent_32replace
-# hidden_dims: [256, 128, 64]
-# latent_dim: 16
-# [16,8]
-# 2
