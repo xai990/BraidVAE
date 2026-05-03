@@ -20,7 +20,10 @@ from bin.model import ConditionalVAE
 
 # Configuration
 VAE_DIR = "results_multistage"
-LATENT_DATA = "latent_all_stages_supervised_pseudotime.tsv"
+LATENT_DATA_CANDIDATES = [
+    "latent_all_stages_aligned_supervised_pseudotime.tsv",
+    "latent_all_stages_supervised_pseudotime.tsv",
+]
 GENE_NAMES_PATH = "gene_names.txt"
 OUTPUT_DIR = "results_gene_importance_gradient"
 
@@ -169,8 +172,16 @@ def main():
         print(f"Gene names not found at {GENE_NAMES_PATH}")
         return
     
-    # Load latent data for labels
-    df_latent = pd.read_csv(LATENT_DATA, sep='\t', index_col=0)
+    # Load latent data for labels (prefer aligned pseudotime output)
+    latent_path = next((p for p in LATENT_DATA_CANDIDATES if os.path.exists(p)), None)
+    if latent_path is None:
+        print("Could not find latent pseudotime file. Tried:")
+        for p in LATENT_DATA_CANDIDATES:
+            print(f"  - {p}")
+        return
+
+    print(f"Using latent data: {latent_path}")
+    df_latent = pd.read_csv(latent_path, sep='\t', index_col=0)
     print(f"Loaded latent data: {df_latent.shape}")
     
     # Find stages
@@ -369,4 +380,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

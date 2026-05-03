@@ -1,4 +1,4 @@
-# Single-Cell Pipeline: MultiVAE → PseudotimeAssign → Informer → Gradient
+# Single-Cell Pipeline: MultiVAE → MNNAlign → PseudotimeAssign → Informer → Gradient
 
 A Python-based computational pipeline for multi-modal single-cell analysis, pseudotime inference, sequence prediction, and gradient attribution.
 
@@ -7,18 +7,19 @@ A Python-based computational pipeline for multi-modal single-cell analysis, pseu
 ## Pipeline Overview
 
 ```
-MultiVAE  ──►  PseudotimeAssign  ──►  Informer  ──►  Gradient
-   │                  │                  │               │
-Embed &           Order cells        Predict       Attribute
-compress          along time         dynamics      importance
+MultiVAE  ──►  MNNAlign  ──►  PseudotimeAssign  ──►  Informer  ──►  Gradient
+   │             │                  │                  │               │
+Embed &      Align latent       Order cells        Predict       Attribute
+compress     spaces             along time         dynamics      importance
 ```
 
 | Stage | Script | Description |
 |---|---|---|
 | 1. MultiVAE | `brcavae.py` | Variational autoencoder workflow that learns stage-aware latent embeddings from transcriptomic data |
-| 2. PseudotimeAssign | `calc_supervised_pseudotime.py` | Assigns supervised pseudotime values to each sample using latent representations from Stage 1 |
-| 3. Informer | `train_timeseries_pseudotime.py` | Informer-based time-series model that predicts latent dynamics along pseudotime |
-| 4. Gradient | `trace_genes_gradient.py` | Computes gradient-based attribution scores to identify genes driving progression-relevant latent dimensions |
+| 2. MNNAlign | `align_latent_spaces_mnn.py` | Aligns stage-specific latent spaces with mutual nearest neighbors (MNN) + Procrustes alignment |
+| 3. PseudotimeAssign | `calc_supervised_pseudotime_aligned.py` | Assigns supervised pseudotime on the aligned latent space |
+| 4. Informer | `train_timeseries_pseudotime.py` | Informer-based time-series model that predicts latent dynamics along pseudotime |
+| 5. Gradient | `trace_genes_gradient.py` | Computes gradient-based attribution scores to identify genes driving progression-relevant latent dimensions |
 
 ---
 
@@ -49,13 +50,16 @@ pip install -r Informer2020/requirements.txt
 # Stage 1: Train MultiVAE and export latent embeddings
 python brcavae.py --config configs/config.yaml
 
-# Stage 2: Assign Supervised Pseudotime
-python calc_supervised_pseudotime.py
+# Stage 2: Align latent spaces using MNN + Procrustes
+python align_latent_spaces_mnn.py
 
-# Stage 3: Train Informer on Pseudotime Trajectories
-python train_timeseries_pseudotime.py --data_path latent_all_stages_supervised_pseudotime.tsv --outdir results_pseudotime
+# Stage 3: Assign Supervised Pseudotime on aligned latent space
+python calc_supervised_pseudotime_aligned.py
 
-# Stage 4: Compute Gradient-Based Gene Attribution
+# Stage 4: Train Informer on Pseudotime Trajectories
+python train_timeseries_pseudotime.py --data_path latent_all_stages_aligned_supervised_pseudotime.tsv --outdir results_pseudotime
+
+# Stage 5: Compute Gradient-Based Gene Attribution
 python trace_genes_gradient.py
 ```
 
@@ -73,9 +77,10 @@ python trace_genes_gradient.py
 ├── .gitignore
 ├── .gitmodules
 ├── brcavae.py                         # Stage 1: MultiVAE workflow
-├── calc_supervised_pseudotime.py      # Stage 2: Pseudotime assignment
-├── train_timeseries_pseudotime.py     # Stage 3: Informer training
-├── trace_genes_gradient.py            # Stage 4: Gradient attribution
+├── align_latent_spaces_mnn.py         # Stage 2: MNN latent alignment
+├── calc_supervised_pseudotime_aligned.py  # Stage 3: Aligned pseudotime assignment
+├── train_timeseries_pseudotime.py     # Stage 4: Informer training
+├── trace_genes_gradient.py            # Stage 5: Gradient attribution
 ├── configs/
 │   └── config.yaml                    # Shared pipeline configuration
 ├── bin/                               # Shared modules imported by pipeline scripts

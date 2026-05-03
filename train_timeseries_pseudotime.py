@@ -505,7 +505,7 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train Informer with Supervised Pseudotime")
-    parser.add_argument("--data_path", type=str, default="latent_all_stages_supervised_pseudotime.tsv")
+    parser.add_argument("--data_path", type=str, default="latent_all_stages_aligned_supervised_pseudotime.tsv")
     parser.add_argument("--outdir", type=str, default="results_pseudotime")
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=100)
@@ -520,4 +520,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     os.makedirs(args.outdir, exist_ok=True)
     train(args)
-
