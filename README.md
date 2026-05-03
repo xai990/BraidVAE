@@ -38,7 +38,6 @@ pip install -e .
 ### Install with pip
 
 ```bash
-pip install -e .
 pip install -r Informer2020/requirements.txt
 ```
 
