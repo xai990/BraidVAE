@@ -105,59 +105,6 @@ def main(args):
             label_names=np.unique(df_all[config.data.label_col].values) if config.data.label_col in df_all.columns else None,
             save_path= os.path.join(config.data.dir_out, "global_umap.png")
         )
-        """
-        # =========================================================
-        # Step 4: Transformer Select Latent (Distillation)
-        # =========================================================
-        logger.log("Step 4: Refining Latent Space with Transformer (Distilling)...")
-        
-        # This distills the VAE features and logs the selected dimensions
-        df_distilled = train_latent_transformer(
-            latent_df=df_all,
-            label_key=config.data.label_col,
-            d_model=config.train.d_model,             
-            nhead=config.train.nhead,
-            num_layers=config.train.num_layers,
-            keep_ratio=0.5,         
-            batch_size=32,
-            epochs=config.train.epochs,
-            outdir=os.path.join(config.data.dir_out, "step4_transformer_distill")
-        )
-        logger.log("Latent distillation complete.")
-        
-        # =========================================================
-        # Step 5: Trajectory VAE (Optional)
-        # =========================================================
-        if args.time_sup:
-            logger.log("\n**********************************")
-            logger.log("Start Training Trajectory VAE to fix Order (1-2-3-4-5)")
-        
-            # Train the Trajectory VAE using the full VAE latent space
-            df_trajectory = train_trajectory_vae(
-                df_all,
-                label_col="label",      
-                latent_dim=2,          
-                hidden_dims=[16, 8],   
-                epochs=150,
-                outdir=os.path.join(config.data.dir_out, "trajectory_model"),
-                time_reg_weight=50.0    
-            )
-            
-            # --- SAFE VISUALIZATION BLOCK ---
-            traj_data = df_trajectory.filter(regex=r"^traj_z").values
-            logger.log(f"Visualizing Trajectory: Found data shape {traj_data.shape}")
-            
-            if traj_data.shape[1] > 0:
-                visualize_embeddings(
-                    traj_data,
-                    labels=df_trajectory[config.data.label_col].values,
-                    label_names=np.unique(df_trajectory[config.data.label_col].values),
-                    save_path=os.path.join(config.data.dir_out, "trajectory_umap.png")
-                )
-                logger.log("Trajectory visualization saved.")
-            else:
-                logger.log("[ERROR] No trajectory columns found (traj_z) to visualize. Skipping UMAP.")
-            """
     # D. SINGLE VAE
     else:
         logger.log("Train single vae using all stage data")
