@@ -1,6 +1,8 @@
-# Single-Cell Pipeline: MultiVAE → MNNAlign → PseudotimeAssign → Informer → Gradient
+# BRAID-VAE: Breast Cancer Stage Integration
+and Dynamics with an Interpretable Multi-VAE
+Framework
 
-A Python-based computational pipeline for multi-modal single-cell analysis, pseudotime inference, sequence prediction, and gradient attribution.
+A Python-based computational pipeline for multi-modal bulk RNA-seq analysis, pseudotime inference, sequence prediction, and gradient attribution.
 
 ---
 
