@@ -1,6 +1,4 @@
-# BRAID-VAE: Breast Cancer Stage Integration
-and Dynamics with an Interpretable Multi-VAE
-Framework
+# BRAID-VAE: Breast Cancer Representation Alignment with Interpretable Dynamics using Variational Autoencoders for Stage Progression
 
 A Python-based computational pipeline for multi-modal bulk RNA-seq analysis, pseudotime inference, sequence prediction, and gradient attribution.
 
