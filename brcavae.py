@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from sklearn.preprocessing import LabelEncoder
 from bin.utils import extract_embeddings, visualize_embeddings, origin_plot, get_active_latent_dims
 from bin.dataset import load_txt_to_anndata, align_genes, preprocess_anndata, balance_anndata_by_label, balance_latent_df
-from bin import logger, dist_util
+from bin import logger
 import argparse
 from omegaconf import OmegaConf
 # Importing all necessary training functions
@@ -35,10 +35,9 @@ def main(args):
     logger.log("**********************************")
     logger.log("log configure")
     
-    # Setup distributed training environment
-    dist_util.setup_dist()
+    # This workflow trains in a single process; no MPI initialization is needed.
     seed_everything(42)
-    logger.log(f"device information:{dist_util.dev()}")
+    logger.log(f"device information:{('cuda' if th.cuda.is_available() else 'cpu')}")
     
     # Create and merge configuration files
     basic_conf = create_config()

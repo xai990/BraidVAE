@@ -68,3 +68,17 @@ build/
 .idea/
 .vscode/
 *.swp
+
+# Local data and historical analysis artifacts are not published
+/resources/
+/*audit*.json
+!scripts/
+!scripts/*.py
+!tests/
+!tests/*.py
+
+!scripts/pooled/*.py
+.venv/
+Figures/
+
+/gene_names.txt

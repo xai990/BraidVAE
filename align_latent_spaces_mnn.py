@@ -13,7 +13,7 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
 # Paths
-LATENT_PATH = "latent_all_stages.tsv"
+LATENT_PATH = "results_multistage/latent_all_stages.tsv"
 TRAIN_EXPR = "datasets_breast/breast_train_GEM_transpose.txt"
 TRAIN_LABELS = "datasets_breast/train_stage_labels_new_updated.txt"
 TEST_EXPR = "datasets_breast/breast_test_GEM_transpose.txt"

@@ -6,6 +6,9 @@ data:
   gene_list: "datasets_breast/hallmark_allgene_transposed.txt"
   filter: "replace"
 train:
+  multivae: true
+  batch_size: 16
+  epochs: 200
   hidden_dims: [1024, 256, 64]
   latent_dim: 32
 
