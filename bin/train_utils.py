@@ -44,7 +44,16 @@ def train_vae_with_test_set(
     warmup_epochs: int = 50,
     ckpt_path: str = "results/best_vae_model.pth",
 ) -> Dict[str, List[float]]:
-    
+    """Select checkpoints using the fixed objective after KL warmup.
+
+    The historically named test_loader is used for model selection and therefore
+    acts as a validation set, not an untouched test set.
+    """
+    if warmup_epochs < 0 or n_epochs <= warmup_epochs:
+        raise ValueError("n_epochs must exceed non-negative warmup_epochs")
+    if len(train_loader) == 0 or len(test_loader) == 0:
+        raise ValueError("Training and validation loaders must be non-empty")
+
     model = model.to(device)
     opt = torch.optim.Adam(model.parameters(), lr=learning_rate)
     sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode="min", patience=5)
@@ -53,10 +62,11 @@ def train_vae_with_test_set(
     history = {k: [] for k in ["train_loss", "test_loss", "train_recon", "train_kl", "test_recon", "test_kl"]}
     best_loss = float("inf")
     patience = 0
+    saved_checkpoint = False
 
     for epoch in range(n_epochs):
         # KL warmup
-        criterion.beta = min(1.0, epoch / max(1, warmup_epochs))
+        criterion.beta = min(1.0, epoch / warmup_epochs) if warmup_epochs else 1.0
 
         # ---- train ----
         model.train()
@@ -109,11 +119,6 @@ def train_vae_with_test_set(
         te_rec /= nte
         te_kl /= nte
         
-        # Scheduler & Early Stopping
-        finite_te = np.isfinite(te_loss)
-        sched_metric = te_loss if finite_te else float("inf")
-        sched.step(sched_metric)
-
         history["train_loss"].append(tr_loss)
         history["test_loss"].append(te_loss)
         history["train_recon"].append(tr_rec)
@@ -121,12 +126,20 @@ def train_vae_with_test_set(
         history["test_recon"].append(te_rec)
         history["test_kl"].append(te_kl)
 
+        # Warmup changes the objective, so its losses are not comparable to
+        # the beta=1 objective used for checkpoint selection and scheduling.
+        if criterion.beta < 1.0:
+            continue
+        finite_te = np.isfinite(te_loss)
+        sched.step(te_loss if finite_te else float("inf"))
+
         improved = finite_te and (te_loss < best_loss)
         if improved:
             best_loss = te_loss
             patience = 0
-            _ensure_dir(os.path.dirname(ckpt_path))
+            _ensure_dir(os.path.dirname(ckpt_path) or ".")
             torch.save(model.state_dict(), ckpt_path)
+            saved_checkpoint = True
         else:
             patience += 1
         
@@ -137,9 +150,10 @@ def train_vae_with_test_set(
         if (epoch + 1) % 10 == 0:
             logger.log(f"Epoch {epoch+1:03d} | train {tr_loss:.4f} | test {te_loss:.4f}")
 
-    # Ensure we load best weights before returning
-    if os.path.exists(ckpt_path):
-        model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
+    # Never fall back to an existing checkpoint from a different run.
+    if not saved_checkpoint:
+        raise RuntimeError("No finite validation loss after KL warmup; no checkpoint selected")
+    model.load_state_dict(torch.load(ckpt_path, map_location=device, weights_only=True))
         
     return history
 

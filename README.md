@@ -82,6 +82,25 @@ The former README's `train_timeseries_pseudotime.py` and `trace_genes_gradient.p
 remain as historical alternatives, but are **not** the stage-transition/decoder-IG
 route above. Pseudotime is descriptive and does not construct Informer training pairs.
 
+### Corrected VAE objective (2026-11-09)
+
+The VAE now uses reconstruction squared error **summed over genes and averaged
+across samples**, plus beta times KL divergence summed over latent dimensions and
+averaged across samples. This replaces the historical per-gene mean reconstruction
+loss, changing the relative weighting of reconstruction and KL.
+
+Checkpoint selection, early stopping and learning-rate scheduling start only when
+beta reaches 1: epoch 51 with the default 50-epoch warmup. Training must run for
+more epochs than the warmup; `warmup_epochs=0` uses beta=1 from the first epoch.
+Both VAE training entry points use the same corrected loop.
+
+This changes new training runs; it does not update existing checkpoints or gene
+lists. Outputs from the historical objective and this corrected objective are
+separate model versions. To adopt newly trained VAEs downstream, regenerate their
+latent coordinates, alignment, transition models, attribution scores and gene
+lists together. The shared `VAELoss` also changes the loss scale in historical
+alternative training routes; any auxiliary loss weights there require reassessment.
+
 ### Principal settings
 
 - VAE: 4,098 features; hidden widths 1024/256/64; 32 latent dimensions;

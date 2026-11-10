@@ -52,3 +52,25 @@ using historical inputs below were performed locally; these files are not bundle
 Public scripts and explicit limitations are preferable to asserting these steps
 were verified. New method changes should be validated separately before updating
 scientific conclusions.
+
+## Corrected VAE objective update (2026-11-09)
+
+The shared VAE loss now sums reconstruction squared error over genes and averages
+it over samples, matching the per-sample scale of the KL term. The shared training
+loop defers checkpoint selection, early stopping and learning-rate scheduling
+until the KL weight reaches one (epoch 51 for the default 50-epoch warmup).
+The legacy training entry point delegates to this loop. Empty loaders, insufficient
+epoch budgets and runs with no finite post-warmup validation loss are rejected;
+a stale checkpoint cannot silently be loaded from a previous run.
+
+Validation for this update: nine unittest checks passed locally (including the
+optional historical-input check), and `pip wheel . --no-deps --no-build-isolation`
+succeeded. The new regression checks cover loss and gradient scaling, batch-size
+invariance, warmup selection and scheduler timing, stale-checkpoint rejection,
+real-model training and best-weight restoration, and the legacy entry point.
+These checks validate software behavior, not end-to-end scientific results.
+
+This is a new training objective, not a retroactive change to existing model
+weights or manuscript results. Historical checkpoints and gene lists remain
+separate artifacts; adopting new checkpoints requires regenerating downstream
+alignment, transition models and attribution results consistently.

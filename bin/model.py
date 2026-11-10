@@ -223,15 +223,12 @@ class VAELoss(nn.Module):
                 labels= None,
                 training=True): 
         
-        # --- FIX 1: Use 'sum' and divide by batch size ---
-        # This calculates loss "per-sample" not "per-gene"
-        # recon_loss = F.mse_loss(recon_x, x, reduction='sum') / x.shape[0]
-        recons_loss =F.mse_loss(recon_x, x)
-        
-        # --- FIX 2: Sum over latent dims, then mean over batch ---
-        # This also calculates loss "per-sample"
-        # kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
-        kl_loss = torch.mean(-0.5 * torch.sum(1 + logvar - mu ** 2 - logvar.exp(), dim = 1), dim = 0)
+        # Both terms are per-sample: sum over genes/latent dimensions,
+        # then average over the batch.
+        recons_loss = F.mse_loss(recon_x, x, reduction="sum") / x.shape[0]
+        kl_loss = -0.5 * torch.sum(
+            1 + logvar - mu.pow(2) - logvar.exp(), dim=1
+        ).mean()
         # applying the beta correction
         if training:
             # https://openreview.net/forum?id=Sy2fzU9gl
@@ -248,132 +245,20 @@ def train_vae_with_test_set(
     model,
     train_loader,
     test_loader,
-    n_epochs= 100,
-    learning_rate= 1e-3,
-    device= 'cuda' if torch.cuda.is_available() else 'cpu',
-    early_stopping_patience= 10
+    n_epochs=100,
+    learning_rate=1e-3,
+    device="cuda" if torch.cuda.is_available() else "cpu",
+    early_stopping_patience=10,
+    warmup_epochs=50,
+    ckpt_path="results/best_vae_model.pth",
 ):
-    """
-    Modified training function that uses a separate test set instead of validation split.
-    
-    This function should replace the train_vae function in the main VAE script
-    when using separate train/test files.
-    """
-   
-    
-    model = model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)
-    
-    criterion = VAELoss()
-    n_epochs_warmup = 50
-    history = {'train_loss': [], 'test_loss': [], 'train_recon': [], 
-               'train_kl': [], 'test_recon': [], 'test_kl': []}
-    
-    best_test_loss = float('inf')
-    patience_counter = 0
-    
-    for epoch in range(n_epochs):
-        
-        # Calculate current beta for annealing
-        if epoch < n_epochs_warmup:
-            current_beta = epoch / n_epochs_warmup
-        else:
-            current_beta = 1.0
-            
-        criterion.beta = current_beta # Update beta in the loss function
-        # Training phase
-        model.train()
-        train_loss = 0
-        train_metrics = {'recon': 0, 'kl': 0, 'adversarial': 0}
-        
-        for batch in train_loader:
-            if len(batch) == 2:
-                data, labels = batch
-                data, labels = data.to(device), labels.to(device)
-            else:
-                data = batch.to(device)
-                labels = None
-            
-            optimizer.zero_grad()
-            
-            # Forward pass
-            recon, input_data, mu, logvar, z, adv_pred = model(data, labels)
-            
-            # Calculate loss
-            loss, loss_dict = criterion(recon, input_data, mu, logvar)
-            
-            # Backward pass
-            loss.backward()
-            optimizer.step()
-            
-            train_loss += loss.item()
-            for key in loss_dict:
-                if key in train_metrics:
-                    train_metrics[key] += loss_dict[key]
-        
-        # Average training metrics
-        train_loss /= len(train_loader)
-        for key in train_metrics:
-            train_metrics[key] /= len(train_loader)
-        
-        history['train_loss'].append(train_loss)
-        history['train_recon'].append(train_metrics['recon'])
-        history['train_kl'].append(train_metrics['kl'])
-        
-        # Test phase
-        model.eval()
-        test_loss = 0
-        test_metrics = {'recon': 0, 'kl': 0, 'adversarial': 0}
-        
-        with torch.no_grad():
-            for batch in test_loader:
-                if len(batch) == 2:
-                    data, labels = batch
-                    data, labels = data.to(device), labels.to(device)
-                else:
-                    data = batch.to(device)
-                    labels = None
-                
-                recon, input_data, mu, logvar, z, adv_pred = model(data, labels)
-                loss, loss_dict = criterion(recon, input_data, mu, logvar, adv_pred, labels)
-                
-                test_loss += loss.item()
-                for key in loss_dict:
-                    if key in test_metrics:
-                        test_metrics[key] += loss_dict[key]
-        
-        test_loss /= len(test_loader)
-        for key in test_metrics:
-            test_metrics[key] /= len(test_loader)
-        
-        history['test_loss'].append(test_loss)
-        history['test_recon'].append(test_metrics['recon'])
-        history['test_kl'].append(test_metrics['kl'])
-        
-        # Learning rate scheduling
-        scheduler.step(test_loss)
-        
-        # Early stopping
-        if test_loss < best_test_loss:
-            best_test_loss = test_loss
-            patience_counter = 0
-            # Save best model
-            torch.save(model.state_dict(), 'results/best_vae_model.pth')
-        else:
-            patience_counter += 1
-            
-        if patience_counter >= early_stopping_patience:
-            print(f"Early stopping at epoch {epoch+1}")
-            break
-        
-        # Print progress
-        if (epoch + 1) % 10 == 0:
-            print(f"Epoch [{epoch+1}/{n_epochs}]")
-            print(f"  Train Loss: {train_loss:.4f} (Recon: {train_metrics['recon']:.4f}, KL: {train_metrics['kl']:.4f})")
-            print(f"  Test Loss: {test_loss:.4f} (Recon: {test_metrics['recon']:.4f}, KL: {test_metrics['kl']:.4f})")
-    
-    # Load best model
-    model.load_state_dict(torch.load('results/best_vae_model.pth'))
-    
-    return history
+    """Backward-compatible entry point for the shared VAE training loop."""
+    # Import here to avoid a circular import: train_utils imports VAELoss.
+    from .train_utils import train_vae_with_test_set as train
+
+    return train(
+        model, train_loader, test_loader, n_epochs=n_epochs,
+        learning_rate=learning_rate, device=device,
+        early_stopping_patience=early_stopping_patience,
+        warmup_epochs=warmup_epochs, ckpt_path=ckpt_path,
+    )
